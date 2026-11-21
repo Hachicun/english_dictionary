@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Từ điển Anh–Việt</title>
+<style>
+  body { font: 18px/1.5 system-ui, -apple-system, sans-serif; max-width: 640px; margin: 0 auto; padding: 12px 16px; }
+  h1 { font-size: 22px; margin: 4px 0 12px; }
+  h2 { margin: 16px 0 4px; }
+  input { width: 100%; box-sizing: border-box; font-size: 18px; padding: 10px; }
+  button { font-size: 16px; min-height: 40px; padding: 4px 12px; margin: 4px 0; }
+  ol { padding-left: 24px; }
+  small { display: block; color: #666; word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>Từ điển Anh–Việt</h1>
+<input id="q" type="search" placeholder="Đang tải dữ liệu…" disabled autocomplete="off" autocapitalize="off" spellcheck="false">
+<div id="out"></div>
+<hr>
+<small>
+Dữ liệu từ điển: Từ điển Anh–Việt thichhoc.com (thichhoc-dict), giấy phép CC BY-SA 4.0.
+<a href="https://github.com/thichhoc-org/thichhoc-dict">https://github.com/thichhoc-org/thichhoc-dict</a>.
+Nguồn gốc: WordNet 3.1 (Princeton), CMUdict (CMU), Wiktionary. Đã chỉnh sửa dữ liệu.
+WordNet 3.1 Copyright 2011 The Trustees of Princeton University. All rights reserved.
+<br>Audio phát âm: Wikimedia Commons (chủ yếu từ Wiktionary), tên người đọc và giấy phép ghi cạnh từng từ.
+</small>
+
+<script>
+const $ = id => document.getElementById(id);
+const POS = { n: 'danh từ', v: 'động từ', adj: 'tính từ', adv: 'trạng từ' };
+let list = [], byWord = new Map(), AUDIO = {};
+
+// Bảng audio giọng Mỹ từ Wikimedia Commons: { từ: đường_dẫn_mp3 }
+fetch('data/audio.json').then(r => r.json()).then(a => { AUDIO = a; show(); }).catch(() => {});
+const COMMONS = 'https://upload.wikimedia.org/wikipedia/commons/';
+// Tên file trên Commons: transcoded/b/bd/TÊN/TÊN.mp3 hoặc b/bd/TÊN
+const fileName = p => decodeURIComponent(p.split('/')[p.startsWith('transcoded/') ? 3 : 2]);
+
+// Ghi nguồn audio: hỏi Commons tên người đọc + giấy phép (có nhớ lại), lỗi/offline thì chỉ để link
+const credits = new Map();
+function credit(name, link) {
+  const set = t => { link.textContent = 'Audio: ' + t + ' · Wikimedia Commons'; };
+  if (credits.has(name)) return set(credits.get(name));
+  fetch('https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&origin=*' +
+        '&prop=imageinfo&iiprop=extmetadata&iiextmetadatafilter=Artist|LicenseShortName&titles=' +
+        encodeURIComponent('File:' + name))
+    .then(r => r.json()).then(j => {
+      const m = j.query.pages[0].imageinfo[0].extmetadata;
+      const text = h => new DOMParser().parseFromString(h || '', 'text/html').body.textContent.trim();
+      const t = text(m.Artist && m.Artist.value) + ' · ' + text(m.LicenseShortName && m.LicenseShortName.value);
+      credits.set(name, t);
+      set(t);
+    }).catch(() => {});
+}
+
+// Tải dữ liệu, lập chỉ mục: từ gốc + dạng chia -> các mục từ
+fetch('data/dict.json').then(r => r.json()).then(d => {
+  list = d;
+  for (const e of d) {
+    for (const w of [e.headword, ...(e.inflections || [])]) {
+      const k = w.toLowerCase();
+      if (!byWord.has(k)) byWord.set(k, []);
+      const a = byWord.get(k);
+      if (!a.includes(e)) a.push(e);
+    }
+  }
+  $('q').disabled = false;
+  $('q').placeholder = 'Nhập từ tiếng Anh';
+  $('q').focus();
+  show();
+});
+
+// Phát âm: Web Speech, ưu tiên giọng Mỹ cài sẵn, bỏ giọng "novelty" của Apple
+const NOVELTY = /Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox/;
+let voice = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter(v => /^en[-_]US/i.test(v.lang) && !NOVELTY.test(v.name));
+  voice = ['Samantha', 'Ava', 'Zoe', 'Allison', 'Nicky']
+    .map(n => vs.find(v => v.name.startsWith(n))).find(Boolean)
+    || vs.find(v => v.localService) || vs[0] || null;
+}
+if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+// Ưu tiên audio người thật; không có hoặc lỗi (offline…) thì máy đọc
+let player = null;
+function play(word) {
+  const a = AUDIO[word.toLowerCase()];
+  if (!a) return say(word);
+  if (player) player.pause();
+  player = new Audio(COMMONS + a);
+  player.onerror = () => say(word);
+  player.play().catch(() => say(word));
+}
+function say(word) {
+  if (!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(word);
+  u.lang = 'en-US';
+  if (voice) u.voice = voice;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+function el(tag, text) {
+  const x = document.createElement(tag);
+  if (text != null) x.textContent = text;
+  return x;
+}
+
+function show() {
+  const out = $('out');
+  out.textContent = '';
+  const q = $('q').value.trim().toLowerCase();
+  if (!q) return;
+
+  // Khớp chính xác (từ gốc trước, rồi tới dạng chia)
+  const hits = (byWord.get(q) || []).slice()
+    .sort((a, b) => (a.headword.toLowerCase() !== q) - (b.headword.toLowerCase() !== q));
+  if (hits.length) {
+    let last = null;
+    for (const e of hits) {
+      if (e.headword !== last) {
+        const h = el('h2', e.headword + ' ');
+        const a = AUDIO[e.headword.toLowerCase()];
+        const b = el('button', a ? '🔊' : '🔊 máy đọc');
+        b.onclick = () => play(e.headword);
+        h.appendChild(b);
+        out.appendChild(h);
+        if (a) {
+          const name = fileName(a);
+          const link = el('a', 'Audio: Wikimedia Commons');
+          link.href = 'https://commons.wikimedia.org/wiki/File:' + encodeURIComponent(name);
+          const s = el('small');
+          s.appendChild(link);
+          out.appendChild(s);
+          credit(name, link);
+        }
+        last = e.headword;
+      }
+      out.appendChild(el('p', (POS[e.pos] || e.pos) + (e.pron ? '  ' + e.pron : '')));
+      const ol = el('ol');
+      for (const s of e.senses_vi) ol.appendChild(el('li', s));
+      out.appendChild(ol);
+    }
+    return;
+  }
+
+  // Không khớp: gợi ý từ bắt đầu bằng chuỗi đã gõ (phổ biến trước)
+  const seen = new Set();
+  for (const e of list) {
+    const w = e.headword;
+    if (w.toLowerCase().startsWith(q) && !seen.has(w)) {
+      seen.add(w);
+      const b = el('button', w);
+      b.onclick = () => { $('q').value = w; show(); };
+      out.appendChild(b);
+      out.appendChild(document.createTextNode(' '));
+      if (seen.size >= 20) break;
+    }
+  }
+  if (!seen.size) out.appendChild(el('p', 'Không tìm thấy.'));
+}
+
+$('q').oninput = show;
+</script>
+</body>
+</html>
