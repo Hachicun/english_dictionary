@@ -12,6 +12,7 @@
   button { font-size: 16px; min-height: 40px; padding: 4px 12px; margin: 4px 0; }
   ol { padding-left: 24px; }
   small { display: block; color: #666; word-break: break-word; }
+  ul.ex { padding-left: 24px; margin: 4px 0 12px; color: #444; font-size: 16px; }
 </style>
 </head>
 <body>
@@ -20,17 +21,30 @@
 <div id="out"></div>
 <hr>
 <small>
-Dữ liệu từ điển: Từ điển Anh–Việt thichhoc.com (thichhoc-dict), giấy phép CC BY-SA 4.0.
+Bộ 5000 từ (danh sách từ, cấp độ, phiên âm Mỹ, ví dụ, audio): Oxford Learner's Dictionaries © Oxford University Press,
+không thuộc giấy phép CC; audio phát trực tiếp từ máy chủ Oxford. Trang này không liên kết với Oxford University Press.
+<br>Nghĩa tiếng Việt và các từ ngoài bộ 5000: Từ điển Anh–Việt thichhoc.com (thichhoc-dict), giấy phép CC BY-SA 4.0.
 <a href="https://github.com/thichhoc-org/thichhoc-dict">https://github.com/thichhoc-org/thichhoc-dict</a>.
 Nguồn gốc: WordNet 3.1 (Princeton), CMUdict (CMU), Wiktionary. Đã chỉnh sửa dữ liệu.
 WordNet 3.1 Copyright 2011 The Trustees of Princeton University. All rights reserved.
-<br>Audio phát âm: Wikimedia Commons (chủ yếu từ Wiktionary), tên người đọc và giấy phép ghi cạnh từng từ.
+<br>Audio các từ ngoài bộ 5000: Wikimedia Commons (chủ yếu từ Wiktionary), tên người đọc và giấy phép ghi cạnh từng từ.
 </small>
 
 <script>
 const $ = id => document.getElementById(id);
-const POS = { n: 'danh từ', v: 'động từ', adj: 'tính từ', adv: 'trạng từ' };
+const POS = {
+  n: 'danh từ', v: 'động từ', adj: 'tính từ', adv: 'trạng từ',
+  noun: 'danh từ', verb: 'động từ', adjective: 'tính từ', adverb: 'trạng từ',
+  preposition: 'giới từ', pronoun: 'đại từ', determiner: 'từ hạn định', conjunction: 'liên từ',
+  exclamation: 'thán từ', number: 'số từ', 'ordinal number': 'số thứ tự',
+  'modal verb': 'động từ khuyết thiếu', 'auxiliary verb': 'trợ động từ', 'linking verb': 'động từ nối',
+  'definite article': 'mạo từ xác định', 'indefinite article': 'mạo từ không xác định',
+  'infinitive marker': 'từ đứng trước động từ nguyên mẫu'
+};
+// Từ loại bộ Oxford -> ký hiệu trong dict.json
+const SHORT = { noun: 'n', verb: 'v', adjective: 'adj', adverb: 'adv' };
 let list = [], byWord = new Map(), AUDIO = {};
+let oxList = [], oxByWord = new Map();
 
 // Bảng audio giọng Mỹ từ Wikimedia Commons: { từ: đường_dẫn_mp3 }
 fetch('data/audio.json').then(r => r.json()).then(a => { AUDIO = a; show(); }).catch(() => {});
@@ -55,21 +69,36 @@ function credit(name, link) {
     }).catch(() => {});
 }
 
-// Tải dữ liệu, lập chỉ mục: từ gốc + dạng chia -> các mục từ
+function index(map, word, e) {
+  const k = word.toLowerCase();
+  if (!map.has(k)) map.set(k, []);
+  const a = map.get(k);
+  if (!a.includes(e)) a.push(e);
+}
+function ready() {
+  const q = $('q');
+  if (q.disabled) {
+    q.disabled = false;
+    q.placeholder = 'Nhập từ tiếng Anh';
+    q.focus();
+  }
+  show();
+}
+
+// Bộ Oxford 5000 (giọng Mỹ): ưu tiên khi tra
+fetch('data/oxford5000.json').then(r => r.json()).then(d => {
+  oxList = d;
+  for (const e of d) index(oxByWord, e.word, e);
+  ready();
+}).catch(() => {});
+
+// Bộ lớn: dùng cho từ ngoài bộ 5000 và để nhận ra dạng chia. Lập chỉ mục: từ gốc + dạng chia -> các mục từ
 fetch('data/dict.json').then(r => r.json()).then(d => {
   list = d;
   for (const e of d) {
-    for (const w of [e.headword, ...(e.inflections || [])]) {
-      const k = w.toLowerCase();
-      if (!byWord.has(k)) byWord.set(k, []);
-      const a = byWord.get(k);
-      if (!a.includes(e)) a.push(e);
-    }
+    for (const w of [e.headword, ...(e.inflections || [])]) index(byWord, w, e);
   }
-  $('q').disabled = false;
-  $('q').placeholder = 'Nhập từ tiếng Anh';
-  $('q').focus();
-  show();
+  ready();
 });
 
 // Phát âm: Web Speech, ưu tiên giọng Mỹ cài sẵn, bỏ giọng "novelty" của Apple
@@ -84,13 +113,34 @@ function pickVoice() {
 if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 // Ưu tiên audio người thật; không có hoặc lỗi (offline…) thì máy đọc
 let player = null;
-function play(word) {
-  const a = AUDIO[word.toLowerCase()];
-  if (!a) return say(word);
+function play(word, src, button) {
   if (player) player.pause();
-  player = new Audio(COMMONS + a);
-  player.onerror = () => say(word);
-  player.play().catch(() => say(word));
+  player = null;
+  if (!src) return say(word);
+  const p = player = new Audio(src);
+  // bỏ qua nếu người dùng đã bấm sang từ khác
+  const fallback = () => { if (player !== p) return; button.textContent = '🔊 máy đọc'; say(word); };
+  p.onerror = fallback;
+  p.play().catch(fallback);
+}
+// Nút loa: audio Oxford (Mỹ) nếu có, không thì Wikimedia Commons, cuối cùng là máy đọc
+function speaker(word, url) {
+  const a = AUDIO[word.toLowerCase()];
+  const src = url || (a ? COMMONS + a : '');
+  const b = el('button', src ? '🔊' : '🔊 máy đọc');
+  b.onclick = () => play(word, src, b);
+  return b;
+}
+function commonsCredit(out, word) {
+  const a = AUDIO[word.toLowerCase()];
+  if (!a) return;
+  const name = fileName(a);
+  const link = el('a', 'Audio: Wikimedia Commons');
+  link.href = 'https://commons.wikimedia.org/wiki/File:' + encodeURIComponent(name);
+  const s = el('small');
+  s.appendChild(link);
+  out.appendChild(s);
+  credit(name, link);
 }
 function say(word) {
   if (!('speechSynthesis' in window)) return;
@@ -107,57 +157,94 @@ function el(tag, text) {
   return x;
 }
 
+// Mục Oxford khớp đúng từ gõ, cộng mục của từ gốc nếu từ gõ là dạng chia (nhờ dict.json)
+function oxfordHits(q) {
+  const hits = (oxByWord.get(q) || []).slice();
+  for (const d of byWord.get(q) || []) {
+    for (const e of oxByWord.get(d.headword.toLowerCase()) || []) {
+      if (SHORT[e.type] === d.pos && !hits.includes(e)) hits.push(e);
+    }
+  }
+  return hits;
+}
+
+function listOf(tag, items) {
+  const x = el(tag);
+  for (const s of items) x.appendChild(el('li', s));
+  return x;
+}
+
+function showOxford(out, hits) {
+  for (const word of new Set(hits.map(e => e.word))) {
+    out.appendChild(el('h2', word));
+    for (const e of hits.filter(e => e.word === word)) {
+      const p = el('p', (POS[e.type] || e.type) + (e.level ? ' · ' + e.level : '') + (e.ipa ? '  ' + e.ipa : '') + ' ');
+      p.appendChild(speaker(word, e.audio));
+      out.appendChild(p);
+      if (!e.audio) commonsCredit(out, word);
+      out.appendChild(e.vi.length ? listOf('ol', e.vi) : el('small', 'Chưa có nghĩa tiếng Việt.'));
+      if (e.examples.length) {
+        out.appendChild(el('small', 'Ví dụ:'));
+        const ul = listOf('ul', e.examples);
+        ul.className = 'ex';
+        out.appendChild(ul);
+      }
+    }
+  }
+}
+
+// shown: các từ đã có tiêu đề ở phần bộ 5000
+function showOther(out, hits, shown) {
+  let last = null;
+  for (const e of hits) {
+    if (e.headword !== last) {
+      if (shown.has(e.headword.toLowerCase())) {
+        out.appendChild(el('small', 'Từ loại khác (ngoài bộ 5000):'));
+      } else {
+        const h = el('h2', e.headword + ' ');
+        h.appendChild(speaker(e.headword));
+        out.appendChild(h);
+        commonsCredit(out, e.headword);
+      }
+      last = e.headword;
+    }
+    out.appendChild(el('p', (POS[e.pos] || e.pos) + (e.pron ? '  ' + e.pron : '')));
+    out.appendChild(listOf('ol', e.senses_vi));
+  }
+}
+
 function show() {
   const out = $('out');
   out.textContent = '';
   const q = $('q').value.trim().toLowerCase();
   if (!q) return;
 
-  // Khớp chính xác (từ gốc trước, rồi tới dạng chia)
-  const hits = (byWord.get(q) || []).slice()
+  // Khớp chính xác: bộ 5000 trước
+  const ox = oxfordHits(q);
+  showOxford(out, ox);
+  // Bộ lớn: khi bộ 5000 không có gì; nếu có thì chỉ thêm từ loại của đúng từ gõ mà bộ 5000 không có
+  let other = (byWord.get(q) || []).slice()
     .sort((a, b) => (a.headword.toLowerCase() !== q) - (b.headword.toLowerCase() !== q));
-  if (hits.length) {
-    let last = null;
-    for (const e of hits) {
-      if (e.headword !== last) {
-        const h = el('h2', e.headword + ' ');
-        const a = AUDIO[e.headword.toLowerCase()];
-        const b = el('button', a ? '🔊' : '🔊 máy đọc');
-        b.onclick = () => play(e.headword);
-        h.appendChild(b);
-        out.appendChild(h);
-        if (a) {
-          const name = fileName(a);
-          const link = el('a', 'Audio: Wikimedia Commons');
-          link.href = 'https://commons.wikimedia.org/wiki/File:' + encodeURIComponent(name);
-          const s = el('small');
-          s.appendChild(link);
-          out.appendChild(s);
-          credit(name, link);
-        }
-        last = e.headword;
-      }
-      out.appendChild(el('p', (POS[e.pos] || e.pos) + (e.pron ? '  ' + e.pron : '')));
-      const ol = el('ol');
-      for (const s of e.senses_vi) ol.appendChild(el('li', s));
-      out.appendChild(ol);
-    }
-    return;
+  if (ox.length) {
+    other = other.filter(e => e.headword.toLowerCase() === q &&
+      !ox.some(o => o.word.toLowerCase() === q && SHORT[o.type] === e.pos));
   }
+  showOther(out, other, new Set(ox.map(o => o.word.toLowerCase())));
+  if (ox.length || other.length) return;
 
-  // Không khớp: gợi ý từ bắt đầu bằng chuỗi đã gõ (phổ biến trước)
+  // Không khớp: gợi ý từ bắt đầu bằng chuỗi đã gõ (bộ 5000 trước, rồi từ phổ biến)
   const seen = new Set();
-  for (const e of list) {
-    const w = e.headword;
-    if (w.toLowerCase().startsWith(q) && !seen.has(w)) {
-      seen.add(w);
-      const b = el('button', w);
-      b.onclick = () => { $('q').value = w; show(); };
-      out.appendChild(b);
-      out.appendChild(document.createTextNode(' '));
-      if (seen.size >= 20) break;
-    }
-  }
+  const suggest = w => {
+    const k = w.toLowerCase();
+    if (seen.size >= 20 || seen.has(k) || !k.startsWith(q)) return;
+    seen.add(k);
+    const b = el('button', w);
+    b.onclick = () => { $('q').value = w; show(); };
+    out.appendChild(b);
+    out.appendChild(document.createTextNode(' '));
+  };
+  for (const e of oxList) suggest(e.word);
+  for (const e of list) { if (seen.size >= 20) break; suggest(e.headword); }
   if (!seen.size) out.appendChild(el('p', 'Không tìm thấy.'));
 }
 

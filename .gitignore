@@ -1,4 +1,5 @@
 raw/
+archive/
 .claude/
 __pycache__/
 .DS_Store
